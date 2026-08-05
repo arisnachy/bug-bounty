@@ -1,0 +1,97 @@
+diff --git a/pandas/core/window/ewm.py b/pandas/core/window/ewm.py
+--- a/pandas/core/window/ewm.py
++++ b/pandas/core/window/ewm.py
+@@ -3,9 +3,6 @@ def mean(self, *args, update=None, update_times=None, **kwargs):
+     is_frame = self._selected_obj.ndim == 2
+     if update_times is not None:
+         raise NotImplementedError("update_times is not implemented.")
+-    update_deltas = np.ones(
+-        max(self._selected_obj.shape[-1] - 1, 0), dtype=np.float64
+-    )
+     if update is not None:
+         if self._mean.last_ewm is None:
+             raise ValueError(
+@@ -28,6 +25,7 @@ def mean(self, *args, update=None, update_times=None, **kwargs):
+         else:
+             result_kwargs["name"] = self._selected_obj.name
+         np_array = self._selected_obj.astype(np.float64).to_numpy()
++    update_deltas = np.ones(max(np_array.shape[0] - 1, 0), dtype=np.float64)
+     ewma_func = generate_online_numba_ewma_func(
+         **get_jit_arguments(self.engine_kwargs)
+     )
+diff --git a/pandas/core/window/online.py b/pandas/core/window/online.py
+--- a/pandas/core/window/online.py
++++ b/pandas/core/window/online.py
+@@ -13,7 +13,7 @@ def online_ewma(values, deltas, minimum_periods, old_wt_factor, new_wt, old_wt,
+                 if is_observations[j] or not ignore_na:
+                     # note that len(deltas) = len(vals) - 1 and deltas[i] is to be
+                     # used in conjunction with vals[i+1]
+-                    old_wt[j] *= old_wt_factor ** deltas[j - 1]
++                    old_wt[j] *= old_wt_factor ** deltas[i - 1]
+                     if is_observations[j]:
+                         # avoid numerical errors on constant series
+                         if weighted_avg[j] != cur[j]:
+diff --git a/pandas/tests/window/test_online.py b/pandas/tests/window/test_online.py
+--- a/pandas/tests/window/test_online.py
++++ b/pandas/tests/window/test_online.py
+@@ -6,6 +6,7 @@ from pandas import (
+     Series,
+ )
+ import pandas._testing as tm
++from pandas.core.window.online import generate_online_numba_ewma_func
+ from pandas.util.version import Version
+ 
+ 
+@@ -19,6 +20,52 @@ class TestEWM:
+         ):
+             online_ewm.mean(update=df.head(1))
+ 
++    def test_online_single_column_frame(self):
++        obj = DataFrame({"a": range(5)})
++        expected = obj.ewm(0.5).mean()
++        online_ewm = obj.head(2).ewm(0.5).online()
++
++        result = online_ewm.mean()
++        tm.assert_equal(result, expected.head(2))
++
++        result = online_ewm.mean(update=obj.tail(3))
++        tm.assert_equal(result, expected.tail(3))
++
++    def test_online_ewma_uses_row_deltas(self):
++        ewm_func = generate_online_numba_ewma_func(
++            nogil=False,
++            parallel=False,
++        )
++        values = np.array(
++            [
++                [1.0, 10.0],
++                [3.0, 30.0],
++                [5.0, 50.0],
++            ]
++        )
++        result, old_wt = ewm_func(
++            values,
++            np.array([1.0, 2.0]),
++            1,
++            0.5,
++            1.0,
++            np.ones(2),
++            True,
++            False,
++        )
++
++        expected = np.array(
++            [
++                [1.0, 10.0],
++                [7.0 / 3.0, 70.0 / 3.0],
++                [47.0 / 11.0, 470.0 / 11.0],
++            ]
++        )
++        np.testing.assert_allclose(result, expected, rtol=1e-12, atol=0)
++        np.testing.assert_allclose(
++            old_wt, np.array([1.375, 1.375]), rtol=1e-12, atol=0
++        )
++
+     @pytest.mark.slow
+     @pytest.mark.parametrize(
+         "obj", [DataFrame({"a": range(5), "b": range(5)}), Series(range(5), name="foo")]
