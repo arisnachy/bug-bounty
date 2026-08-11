@@ -1,0 +1,33 @@
+name: Public Source Transport
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kira-public-source-transport.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  transport:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch pinned public source
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error \
+            'https://raw.githubusercontent.com/Kadantte/tennis_atp/2c40e40c0f3ac51cc11eabe6c7c25932234e83e0/atp_matches_2025.csv' \
+            -o atp_matches_2025.csv
+          actual="$(git hash-object atp_matches_2025.csv)"
+          test "$actual" = 'b9c0d84ee91691cc10fbe1d56212c39760dddcdb'
+          echo "verified_blob=$actual"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pinned-public-source-b9c0d84
+          path: atp_matches_2025.csv
+          retention-days: 1
